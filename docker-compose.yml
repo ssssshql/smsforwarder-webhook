@@ -1,0 +1,27 @@
+services:
+  smsforwarder-webhook:
+    # 本地构建：取消注释 build，并注释 image
+    # build: .
+    image: ssssshql/smsforwarder-webhook:latest
+    container_name: smsforwarder-webhook
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    environment:
+      # 可选：手动指定密钥；不设则首次启动自动生成并写入 /data/api_key
+      # API_KEY: "your-secret-key-here"
+      PORT: "8080"
+      DATA_DIR: /data
+      CODE_TTL: ${CODE_TTL:-5m}
+      TZ: Asia/Shanghai
+    volumes:
+      - smsforwarder_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  smsforwarder_data:
