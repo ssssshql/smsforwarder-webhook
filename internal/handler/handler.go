@@ -55,7 +55,6 @@ func (h *Handler) KeyAuth() gin.HandlerFunc {
 func (h *Handler) Submit(c *gin.Context) {
 	rawBody, _ := io.ReadAll(c.Request.Body)
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(rawBody))
-	log.Printf("原始请求 content-type=%q query=%q body_len=%d body=%q", c.Request.Header.Get("Content-Type"), c.Request.URL.RawQuery, len(rawBody), string(rawBody))
 
 	var from, msgType, msg, phone string
 	var ts int64
@@ -63,7 +62,7 @@ func (h *Handler) Submit(c *gin.Context) {
 	if strings.Contains(c.Request.Header.Get("Content-Type"), "application/json") {
 		var p parse.Content
 		if err := json.Unmarshal(rawBody, &p); err != nil {
-			log.Printf("解析 JSON body 失败: %v | raw=%q", err, string(rawBody))
+			log.Printf("解析 JSON body 失败: %v", err)
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "JSON body 不是合法 JSON: " + err.Error()})
 			return
 		}
@@ -79,7 +78,6 @@ func (h *Handler) Submit(c *gin.Context) {
 		contentRaw := param(c, "content")
 		tsRaw := param(c, "timestamp")
 		sign := param(c, "sign")
-		log.Printf("收到提交请求 from=%q ts=%q sign_len=%d content_len=%d content=%q", from, tsRaw, len(sign), len(contentRaw), contentRaw)
 
 		if tsRaw == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "timestamp 必填"})
@@ -98,7 +96,7 @@ func (h *Handler) Submit(c *gin.Context) {
 		var err error
 		msgType, msg, phone, err = parse.ContentField(contentRaw)
 		if err != nil {
-			log.Printf("解析 content 失败: %v | raw_len=%d raw=%q", err, len(contentRaw), contentRaw)
+			log.Printf("解析 content 失败: %v", err)
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
