@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -46,34 +49,62 @@ func (h *Handler) KeyAuth() gin.HandlerFunc {
 	}
 }
 
-// Submit 提交短信：form from/content/timestamp/sign
+// Submit 提交短信：支持两种格式
+// 1) JSON body：App 直接把 {"type","msg","phone"} 当 body 发过来（application/json）
+// 2) 表单：from/content/timestamp/sign（验签）
 func (h *Handler) Submit(c *gin.Context) {
-	_ = c.Request.ParseForm()
-	from := param(c, "from")
-	contentRaw := param(c, "content")
-	tsRaw := param(c, "timestamp")
-	sign := param(c, "sign")
+	rawBody, _ := io.ReadAll(c.Request.Body)
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(rawBody))
+	log.Printf("原始请求 content-type=%q query=%q body_len=%d body=%q", c.Request.Header.Get("Content-Type"), c.Request.URL.RawQuery, len(rawBody), string(rawBody))
 
-	if tsRaw == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "timestamp 必填"})
-		return
-	}
-	if sign == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "sign 必填"})
-		return
-	}
-	if !auth.VerifySign(sign, tsRaw, h.secret) {
-		log.Printf("签名校验失败 from=%q timestamp=%q", from, tsRaw)
-		c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "签名校验失败"})
-		return
+	var from, msgType, msg, phone string
+	var ts int64
+
+	if strings.Contains(c.Request.Header.Get("Content-Type"), "application/json") {
+		var p parse.Content
+		if err := json.Unmarshal(rawBody, &p); err != nil {
+			log.Printf("解析 JSON body 失败: %v | raw=%q", err, string(rawBody))
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "JSON body 不是合法 JSON: " + err.Error()})
+			return
+		}
+		if p.Msg == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "msg 为空"})
+			return
+		}
+		msgType, msg, phone = p.Type, p.Msg, p.Phone
+		ts = time.Now().UnixMilli()
+	} else {
+		_ = c.Request.ParseForm()
+		from = param(c, "from")
+		contentRaw := param(c, "content")
+		tsRaw := param(c, "timestamp")
+		sign := param(c, "sign")
+		log.Printf("收到提交请求 from=%q ts=%q sign_len=%d content_len=%d content=%q", from, tsRaw, len(sign), len(contentRaw), contentRaw)
+
+		if tsRaw == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "timestamp 必填"})
+			return
+		}
+		if sign == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "sign 必填"})
+			return
+		}
+		if !auth.VerifySign(sign, tsRaw, h.secret) {
+			log.Printf("签名校验失败 from=%q timestamp=%q", from, tsRaw)
+			c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "签名校验失败"})
+			return
+		}
+
+		var err error
+		msgType, msg, phone, err = parse.ContentField(contentRaw)
+		if err != nil {
+			log.Printf("解析 content 失败: %v | raw_len=%d raw=%q", err, len(contentRaw), contentRaw)
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		ts, _ = strconv.ParseInt(tsRaw, 10, 64)
 	}
 
-	msgType, msg, phone, err := parse.ContentField(contentRaw)
-	if err != nil {
-		log.Printf("解析 content 失败: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
-		return
-	}
 	code, ok := parse.Code(msg)
 	if !ok {
 		log.Printf("未能提取验证码 type=%q phone=%q", msgType, phone)
@@ -81,7 +112,6 @@ func (h *Handler) Submit(c *gin.Context) {
 		return
 	}
 
-	ts, _ := strconv.ParseInt(tsRaw, 10, 64)
 	e := h.store.Put(from, msgType, phone, msg, code, ts)
 	log.Printf("提交 type=%q phone=%q code=%q expire=%s", e.Type, e.Phone, e.Code, e.ExpireAt.Format(time.RFC3339))
 	c.JSON(http.StatusOK, gin.H{

@@ -17,9 +17,26 @@ type Entry struct {
 	ExpireAt  time.Time `json:"expire_at"`
 }
 
-// key 按 type + phone 分槽，每个组合仅保留最近一条
+// normalizePhone 提取手机号：取全部数字的后 11 位（中国手机号）。
+// 如 "SIM1_中国移动_+8615297731448" -> "15297731448"，
+// "15297731448" / "+8615297731448" -> "15297731448"。
+// 数字不足 11 位时返回原值，保证非手机号标识仍可精确匹配。
+func normalizePhone(phone string) string {
+	var digits []byte
+	for i := 0; i < len(phone); i++ {
+		if phone[i] >= '0' && phone[i] <= '9' {
+			digits = append(digits, phone[i])
+		}
+	}
+	if len(digits) >= 11 {
+		return string(digits[len(digits)-11:])
+	}
+	return phone
+}
+
+// key 按 type + 归一化 phone 分槽，每个组合仅保留最近一条
 func key(msgType, phone string) string {
-	return msgType + "\x00" + phone
+	return msgType + "\x00" + normalizePhone(phone)
 }
 
 // Store 内存仓库：每个 (type, phone) 仅保留最近一条，进程重启后清空
@@ -65,10 +82,11 @@ func (s *Store) Get(msgType, phone string, consume bool) (Entry, bool) {
 		if msgType != "" && phone != "" {
 			return s.take(key(msgType, phone), consume, now)
 		}
-		// 仅 type 或仅 phone：找匹配且最新的一条
+		// 仅 type 或仅 phone：找匹配且最新的一条（phone 按归一化后比较）
 		var best Entry
 		var bestKey string
 		found := false
+		nphone := normalizePhone(phone)
 		for k, e := range s.entries {
 			if now.After(e.ExpireAt) {
 				delete(s.entries, k)
@@ -77,7 +95,7 @@ func (s *Store) Get(msgType, phone string, consume bool) (Entry, bool) {
 			if msgType != "" && e.Type != msgType {
 				continue
 			}
-			if phone != "" && e.Phone != phone {
+			if phone != "" && normalizePhone(e.Phone) != nphone {
 				continue
 			}
 			if !found || e.CreatedAt.After(best.CreatedAt) {
